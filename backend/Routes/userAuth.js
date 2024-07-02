@@ -9,22 +9,23 @@ router.post("/signup", async (req, res) => {
   try {
     const { fullname, username, password, confirmPassword, gender } = req.body;
     
-    const boyProfilePic = `https://avatar.iran.liara.run/public/boy?username=${username}`;
-
-    const girlProfilePic = `https://avatar.iran.liara.run/public/girl?username=${username}`;
-
     if (password != confirmPassword) {
       return res.status(400).json({ error: "Password don't match" });
     }
     const user = await User.findOne({ username });
-
+    
     if (user) {
       return res.status(400).json({ error: "User already exist" });
     }
-
+    
     // Hash password here
-    const hashPass = await bcrypt.hash(password, 10)
+    const salt = await bcrypt.genSalt(10);
+    const hashPass = await bcrypt.hash(password, salt)
+    
+    const boyProfilePic = `https://avatar.iran.liara.run/public/boy?username=${username}`;
 
+    const girlProfilePic = `https://avatar.iran.liara.run/public/girl?username=${username}`;
+    
     const newUser = new User({
       fullname,
       username,
@@ -34,11 +35,12 @@ router.post("/signup", async (req, res) => {
     });
 
     if(newUser){
+      
+      generateTokenAndSetCookies(newUser._id, res)
       await newUser.save()
 
-      generateTokenAndSetCookies(newUser._id, res)
-
       return res.status(201).json({
+        msg: "User Created successfully",
         _id: newUser._id,
         fullname: newUser.fullname,
         username: newUser.username,
@@ -49,7 +51,6 @@ router.post("/signup", async (req, res) => {
       return res.status(400).json({error: "Invalid user data."})
     }
     
-
   } catch (err) {
     console.log("error in signup controller", err.message);
     return res.status(500).json({ error: "Internal server error" });
@@ -70,6 +71,7 @@ router.post("/login", async(req, res) => {
     generateTokenAndSetCookies(user._id, res)
 
     return res.status(201).json({
+      message: "Login Successfully",
       _id: user._id,
       fullname: user.fullname,
       username: user.username,

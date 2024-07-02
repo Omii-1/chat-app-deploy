@@ -2,6 +2,7 @@ const router = require("express").Router()
 const Conversation = require("../model/conversationModel")
 const Message = require("../model/messageModel")
 const protectRoute = require("../middleware/protectRoute")
+const { getReceiverSocketId, io } = require("../socket/socket")
 
 router.post("/send/:id", protectRoute, async(req, res) => {
   try {
@@ -35,6 +36,13 @@ router.post("/send/:id", protectRoute, async(req, res) => {
 
     // run in parallel
     await Promise.all([conversation.save(), newMessage.save()])
+
+    // Socket io functionality 
+    const receiverSocketId = getReceiverSocketId(receiverId)
+    if(receiverSocketId){
+      io.to(receiverSocketId).emit("newMessage", newMessage)
+    }
+
 
     res.status(200).json(newMessage)
 
