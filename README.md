@@ -1,293 +1,336 @@
 LIVE - https://chat-app-om.onrender.com
 
 
-Here’s a step-by-step guide to implement Stripe in a Node.js backend and a frontend where the user can:
+```
+import express from 'express';
+import 'reflect-metadata';
+import dotenv from 'dotenv';
+import { createConnection } from 'typeorm';
+import paymentRoutes from './routes/paymentRoutes';
+import webhookRoutes from './routes/webhookRoutes';
+import stripe from './utils/stripe';
 
-1. Select a payment method.
-
-
-2. Enter payment details.
-
-
-3. Save card details.
-
-
-4. Handle subscriptions or one-time payments.
-
-
-
-
----
-
-Step 1: Set Up Your Node.js Project
-
-1. Initialize the Project:
-
-mkdir stripe-integration
-cd stripe-integration
-npm init -y
-
-
-2. Install Dependencies:
-
-npm install express stripe body-parser cors dotenv
-
-stripe: For Stripe integration.
-
-express: For building APIs.
-
-body-parser: To parse incoming requests.
-
-cors: To handle cross-origin requests.
-
-dotenv: To manage environment variables.
-
-
-
-3. Set Up .env:
-Create a .env file for your Stripe secret keys:
-
-STRIPE_SECRET_KEY=your-stripe-secret-key
-STRIPE_PUBLISHABLE_KEY=your-stripe-publishable-key
-
-
-
-
----
-
-Step 2: Backend Implementation (Node.js with Express)
-
-Server Setup
-
-Create a file called server.js:
-
-const express = require('express');
-const bodyParser = require('body-parser');
-const cors = require('cors');
-const Stripe = require('stripe');
-require('dotenv').config();
+dotenv.config();
 
 const app = express();
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+app.use(express.json());
 
-app.use(bodyParser.json());
-app.use(cors());
+// Database Connection
+createConnection().then(() => {
+    console.log('Database Connected');
+}).catch((err) => console.error('DB Connection Error:', err));
 
-// Health Check Endpoint
-app.get('/', (req, res) => {
-    res.send('Stripe Integration API is running.');
-});
+// API Routes
+app.use('/api/payments', paymentRoutes);
+app.use('/api/webhooks', webhookRoutes);
 
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
----
+// ormconfig.json
+/*
+{
+  "type": "postgres",
+  "host": "localhost",
+  "port": 5432,
+  "username": "postgres",
+  "password": "password",
+  "database": "ecommerce",
+  "synchronize": true,
+  "logging": true,
+  "entities": ["src/entities/*.ts"]
+}
+*/
 
-Create a Customer (For saving card details)
+// entities/User.ts
+import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 
-When a user opts to save card details, create a Stripe customer:
+@Entity()
+export class User {
+    @PrimaryGeneratedColumn()
+    id: number;
 
-app.post('/create-customer', async (req, res) => {
-    const { email, name } = req.body;
-    try {
-        const customer = await stripe.customers.create({
-            email,
-            name,
-        });
-        res.status(200).json({ customer });
-    } catch (error) {
-        res.status(400).json({ error: error.message });
-    }
-});
+    @Column()
+    email: string;
 
+    @Column()
+    firstName: string;
 
----
+    @Column()
+    lastName: string;
 
-Setup Payment Intent (For One-Time Payment)
+    @Column()
+    phone: string;
 
-Payment intents handle the payment and card authentication:
+    @Column()
+    country: string;
 
-app.post('/create-payment-intent', async (req, res) => {
-    const { amount, currency, paymentMethodId, customerId, saveCard } = req.body;
-    try {
-        // Attach payment method to customer (if saving card)
-        if (saveCard && customerId) {
-            await stripe.paymentMethods.attach(paymentMethodId, { customer: customerId });
-            await stripe.customers.update(customerId, {
-                invoice_settings: { default_payment_method: paymentMethodId },
-            });
+    @Column()
+    postcode: string;
+
+    @Column()
+    password: string;
+}
+
+// entities/Payment.ts
+import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
+
+@Entity()
+export class Payment {
+    @PrimaryGeneratedColumn()
+    id: number;
+
+    @Column()
+    userId: number;
+
+    @Column()
+    amount: number;
+
+    @Column()
+    paymentMethod: string;
+
+    @Column()
+    pouchType: string;
+
+    @Column()
+    stripePaymentId: string;
+
+    @Column()
+    status: string;
+}
+
+// services/paymentService.ts
+import { getRepository } from 'typeorm';
+import { User } from '../entities/User';
+import { Payment } from '../entities/Payment';
+import stripe from '../utils/stripe';
+
+export class PaymentService {
+    async createPayment(userData: any, products: any[]) {
+        const userRepository = getRepository(User);
+        const paymentRepository = getRepository(Payment);
+        let totalAmount = 0;
+
+        // Calculate total amount for all products
+        for (const productData of products) {
+            const price = await stripe.prices.retrieve(productData.priceId);
+            totalAmount += price.unit_amount || 0;
         }
 
-        // Create a Payment Intent
+        // Stripe PaymentIntent
         const paymentIntent = await stripe.paymentIntents.create({
-            amount,
-            currency,
-            payment_method: paymentMethodId,
-            customer: customerId || undefined,
-            confirm: true,
+            amount: totalAmount,
+            currency: 'usd',
+            payment_method: products[0].paymentMethodId,
+            confirm: true
         });
 
-        res.status(200).json({ paymentIntent });
-    } catch (error) {
-        res.status(400).json({ error: error.message });
-    }
-});
+        const paymentStatus = paymentIntent.status === 'succeeded' ? 'success' : 'failed';
 
-
----
-
-Setup Subscription (For Recurring Payments)
-
-app.post('/create-subscription', async (req, res) => {
-    const { customerId, priceId, paymentMethodId } = req.body;
-    try {
-        // Attach payment method to customer
-        await stripe.paymentMethods.attach(paymentMethodId, { customer: customerId });
-        await stripe.customers.update(customerId, {
-            invoice_settings: { default_payment_method: paymentMethodId },
-        });
-
-        // Create Subscription
-        const subscription = await stripe.subscriptions.create({
-            customer: customerId,
-            items: [{ price: priceId }],
-        });
-
-        res.status(200).json({ subscription });
-    } catch (error) {
-        res.status(400).json({ error: error.message });
-    }
-});
-
-
----
-
-Step 3: Frontend Integration with Stripe.js
-
-Use Stripe.js to collect payment details and handle user interaction.
-
-1. Install Stripe.js:
-In your frontend project:
-
-npm install @stripe/react-stripe-js @stripe/stripe-js
-
-
-2. Setup Stripe Elements:
-Create a payment form where the user can select a payment method and enter details.
-
-import React, { useState } from 'react';
-import { Elements, CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
-import { loadStripe } from '@stripe/stripe-js';
-
-const stripePromise = loadStripe('your-publishable-key');
-
-function PaymentForm({ customerId, priceId, isSubscription }) {
-    const stripe = useStripe();
-    const elements = useElements();
-    const [saveCard, setSaveCard] = useState(false);
-
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-        const cardElement = elements.getElement(CardElement);
-
-        const { paymentMethod, error } = await stripe.createPaymentMethod({
-            type: 'card',
-            card: cardElement,
-        });
-
-        if (error) {
-            console.error(error);
-            return;
+        let user = await userRepository.findOne({ email: userData.email });
+        if (!user && paymentStatus === 'success') {
+            user = userRepository.create(userData);
+            await userRepository.save(user);
         }
 
-        const response = await fetch(isSubscription ? '/create-subscription' : '/create-payment-intent', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                paymentMethodId: paymentMethod.id,
-                customerId,
-                priceId,
-                saveCard,
-            }),
-        });
-
-        const data = await response.json();
-        console.log(data);
-    };
-
-    return (
-        <form onSubmit={handleSubmit}>
-            <CardElement />
-            <label>
-                Save Card for Future Payments
-                <input type="checkbox" checked={saveCard} onChange={() => setSaveCard(!saveCard)} />
-            </label>
-            <button type="submit" disabled={!stripe || !elements}>
-                Pay
-            </button>
-        </form>
-    );
+        for (const productData of products) {
+            const price = await stripe.prices.retrieve(productData.priceId);
+            const newPayment = paymentRepository.create({
+                userId: user?.id || 0,
+                amount: price.unit_amount,
+                status: paymentStatus,
+                stripePaymentId: paymentIntent.id,
+                pouchType: productData.pouchType,
+                paymentMethod: productData.paymentMethod
+            });
+            await paymentRepository.save(newPayment);
+        }
+        return { message: 'Payment processed', status: paymentStatus };
+    }
 }
 
-export default function App() {
-    return (
-        <Elements stripe={stripePromise}>
-            <PaymentForm customerId="customer-id" priceId="price-id" isSubscription={false} />
-        </Elements>
-    );
+// controllers/paymentController.ts
+import { Request, Response } from 'express';
+import { PaymentService } from '../services/paymentService';
+
+export class PaymentController {
+    private paymentService = new PaymentService();
+
+    async handlePayment(req: Request, res: Response) {
+        try {
+            const payment = await this.paymentService.createPayment(req.body.user, req.body.products);
+            res.status(200).json(payment);
+        } catch (error) {
+            res.status(400).json({ error: error.message });
+        }
+    }
 }
 
+// routes/paymentRoutes.ts
+import { Router } from 'express';
+import { PaymentController } from '../controllers/paymentController';
+
+const router = Router();
+const paymentController = new PaymentController();
+
+router.post('/buy', paymentController.handlePayment);
+
+export default router;
+
+// routes/webhookRoutes.ts
+import { Router } from 'express';
+import stripe from '../utils/stripe';
+
+const router = Router();
+
+router.post('/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+    const sig = req.headers['stripe-signature'];
+    let event;
+
+    try {
+        event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    } catch (err) {
+        return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    if (event.type === 'payment_intent.succeeded') {
+        console.log('Payment Successful:', event.data.object);
+    } else if (event.type === 'payment_intent.payment_failed') {
+        console.log('Payment Failed:', event.data.object);
+    }
+
+    res.json({ received: true });
+});
+
+export default router;
+
+// utils/stripe.ts
+import Stripe from 'stripe';
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-01' });
+export default stripe;
 
 
+```
+// Frontend (React + TypeScript) - Stripe Payment Integration
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import { loadStripe } from '@stripe/stripe-js';
+import {
+  Elements,
+  CardElement,
+  useStripe,
+  useElements,
+} from '@stripe/react-stripe-js';
 
----
+const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY);
 
-Step 4: Testing the Implementation
+interface Product {
+  id: string;
+  priceId: string;
+}
 
-1. Run the Backend:
+interface User {
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  country: string;
+  postcode: string;
+  password: string;
+}
 
-node server.js
+const CheckoutForm = ({ products, user }: { products: Product[], user: User }) => {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!stripe || !elements) return;
 
-2. Use Stripe’s Test Environment:
+    setLoading(true);
+    try {
+      const { data: clientSecret } = await axios.post('/api/payments/buy', {
+        user,
+        products
+      });
 
-Use test card numbers provided by Stripe: Stripe Test Cards.
+      const result = await stripe.confirmCardPayment(clientSecret, {
+        payment_method: {
+          card: elements.getElement(CardElement)!,
+          billing_details: {
+            name: `${user.firstName} ${user.lastName}`,
+            email: user.email,
+            phone: user.phone,
+            address: {
+              postal_code: user.postcode,
+              country: user.country,
+            },
+          },
+        },
+      });
 
-Example: 4242 4242 4242 4242 (Visa).
+      if (result.error) {
+        setError(result.error.message || 'Payment failed');
+      } else {
+        if (result.paymentIntent?.status === 'succeeded') {
+          alert('Payment Successful!');
+        }
+      }
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Payment failed');
+    }
+    setLoading(false);
+  };
 
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <CardElement className="p-4 border rounded" />
+      {error && <p className="text-red-500">{error}</p>}
+      <button
+        type="submit"
+        disabled={!stripe || loading}
+        className="bg-blue-500 text-white px-6 py-2 rounded-md disabled:opacity-50"
+      >
+        {loading ? 'Processing...' : 'Pay Now'}
+      </button>
+    </form>
+  );
+};
 
+const PaymentPage = () => {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [user, setUser] = useState<User>({
+    email: '',
+    firstName: '',
+    lastName: '',
+    phone: '',
+    country: '',
+    postcode: '',
+    password: ''
+  });
 
-3. Test Scenarios:
+  useEffect(() => {
+    axios.get('https://ipapi.co/json/')
+      .then((response) => {
+        setUser((prev) => ({ ...prev, country: response.data.country_name }));
+      });
+  }, []);
 
-One-time payment.
+  return (
+    <Elements stripe={stripePromise}>
+      <div className="min-h-screen flex items-center justify-center bg-gray-100">
+        <div className="w-full max-w-2xl bg-white p-6 rounded-lg shadow-md">
+          <h1 className="text-2xl font-bold mb-4">Checkout</h1>
+          <CheckoutForm products={products} user={user} />
+        </div>
+      </div>
+    </Elements>
+  );
+};
 
-Subscription with card saving.
-
-
-
-
-
----
-
-Step 5: Deploy and Secure
-
-Use HTTPS for secure communication.
-
-Deploy the backend to a server (e.g., Heroku, AWS) and the frontend using tools like Vercel or Netlify.
-
-Use webhooks to handle payment status updates.
-
-
-
----
-
-This setup allows:
-
-1. Saving card details for future payments.
-
-
-2. Processing one-time payments.
-
-
-3. Handling subscriptions dynamically.
+export default PaymentPage;
 
 
 
