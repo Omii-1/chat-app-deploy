@@ -212,8 +212,6 @@ export default stripe;
 
 
 
-
-```
 // Frontend (React + TypeScript) - Stripe Payment Integration
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
