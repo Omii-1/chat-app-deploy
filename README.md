@@ -210,6 +210,9 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '20
 export default stripe;
 
 
+
+
+
 ```
 // Frontend (React + TypeScript) - Stripe Payment Integration
 import React, { useState, useEffect } from 'react';
